@@ -12,6 +12,7 @@
       background: #f5f5f5;
       text-align: center;
     }
+
     .container {
       max-width: 520px;
       margin: auto;
@@ -20,11 +21,13 @@
       border-radius: 12px;
       box-shadow: 0 2px 10px rgba(0,0,0,.12);
     }
+
     video, canvas, img {
       width: 100%;
       border-radius: 12px;
       background: #000;
     }
+
     button {
       margin: 8px 4px;
       padding: 12px 16px;
@@ -35,11 +38,17 @@
       font-size: 16px;
       cursor: pointer;
     }
+
     button:disabled {
       opacity: .6;
       cursor: not-allowed;
     }
-    #preview { display: none; margin-top: 12px; }
+
+    #preview {
+      display: none;
+      margin-top: 12px;
+    }
+
     #status {
       margin-top: 12px;
       font-size: 14px;
@@ -54,8 +63,8 @@
   <div class="container">
     <h2>Capturar foto</h2>
 
-    <video id="video" autoplay playsinline></video>
-    anvas id="canvas" style="display:none;"></canvas>
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas" style="display:none;"></canvas>
     <img id="preview" alt="Vista previa" />
 
     <div>
@@ -72,55 +81,116 @@
 
     let stream = null;
     let capturedBase64 = null;
+    let cameraReady = false;
 
-    document.getElementById('btnCam').addEventListener('click', startCamera);
-    document.getElementById('btnFoto').addEventListener('click', takePhoto);
-    document.getElementById('btnEnviar').addEventListener('click', uploadPhoto);
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const preview = document.getElementById('preview');
+    const btnCam = document.getElementById('btnCam');
+    const btnFoto = document.getElementById('btnFoto');
+    const btnEnviar = document.getElementById('btnEnviar');
+
+    btnCam.addEventListener('click', startCamera);
+    btnFoto.addEventListener('click', takePhoto);
+    btnEnviar.addEventListener('click', uploadPhoto);
 
     async function startCamera() {
       try {
+        cameraReady = false;
+        capturedBase64 = null;
+        preview.style.display = 'none';
+
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+        }
+
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
           audio: false
         });
-        const video = document.getElementById('video');
+
         video.srcObject = stream;
-        setStatus('Cámara activa');
+
+        await video.play();
+
+        if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+          cameraReady = true;
+          setStatus('Cámara activa y lista para capturar');
+          return;
+        }
+
+        video.onloadedmetadata = async () => {
+          await video.play();
+          setTimeout(() => {
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              cameraReady = true;
+              setStatus('Cámara activa y lista para capturar');
+            } else {
+              setStatus('La cámara abrió, pero aún no entrega imagen. Espera un momento.');
+            }
+          }, 300);
+        };
+
       } catch (e) {
         setStatus('No se pudo abrir la cámara: ' + e.name + ' - ' + e.message);
       }
     }
 
     function takePhoto() {
-      const video = document.getElementById('video');
-      const canvas = document.getElementById('canvas');
-      const preview = document.getElementById('preview');
+      if (!cameraReady) {
+        setStatus('La cámara aún no está lista. Abre la cámara y espera 1 segundo.');
+        return;
+      }
 
-      if (!video.videoWidth) {
-        setStatus('Primero abre la cámara');
+      if (!video.videoWidth || !video.videoHeight) {
+        setStatus('No hay dimensiones válidas del video para capturar.');
         return;
       }
 
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
+
       const ctx = canvas.getContext('2d');
 
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      setStatus('Capturando foto...');
 
-      // Marca de agua en el canvas (quemada en la foto)
-      ctx.font = '40px Arial';
-      ctx.fillStyle = 'rgba(255,0,0,0.25)';
-      ctx.textAlign = 'center';
-      ctx.translate(canvas.width / 2, canvas.height / 2);
-      ctx.rotate(-Math.PI / 8);
-      ctx.fillText('Documento capturado', 0, 0);
-      ctx.setTransform(1,0,0,1,0,0);
+      setTimeout(() => {
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      capturedBase64 = canvas.toDataURL('image/jpeg', 0.92);
-      preview.src = capturedBase64;
-      preview.style.display = 'block';
+          const fecha = new Date().toLocaleString('es-CO');
 
-      setStatus('Foto capturada con marca de agua');
+          const fontSize = Math.max(24, Math.floor(canvas.width * 0.035));
+          ctx.font = `bold ${fontSize}px Arial`;
+          ctx.fillStyle = 'rgba(255, 0, 0, 0.28)';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+
+          ctx.translate(canvas.width / 2, canvas.height / 2);
+          ctx.rotate(-Math.PI / 8);
+          ctx.fillText('Documento capturado', 0, -10);
+          ctx.fillText(fecha, 0, fontSize + 10);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+          capturedBase64 = canvas.toDataURL('image/jpeg', 0.92);
+
+          if (!capturedBase64 || capturedBase64 === 'data:,') {
+            setStatus('No se pudo generar la imagen capturada.');
+            return;
+          }
+
+          preview.src = capturedBase64;
+          preview.style.display = 'block';
+
+          setStatus('Foto capturada con marca de agua correctamente');
+        } catch (err) {
+          setStatus('Error al capturar la foto: ' + err.message);
+        }
+      }, 200);
     }
 
     async function uploadPhoto() {
@@ -143,7 +213,16 @@
           })
         });
 
-        const data = await res.json();
+        const text = await res.text();
+
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          setStatus('La respuesta no vino en JSON. Respuesta: ' + text);
+          return;
+        }
+
         if (!data.ok) {
           setStatus('Error desde Apps Script: ' + (data.error || 'desconocido'));
           return;
